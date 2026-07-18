@@ -1,0 +1,223 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  BORROWER
+  LOAN_OFFICER
+  UNDERWRITER
+  OPERATIONS_MANAGER
+  SERVICING_AGENT
+}
+
+enum ApplicationStage {
+  INTAKE
+  VERIFICATION
+  CREDIT_DECISIONING
+  CONDITIONS
+  APPROVED
+  DISBURSEMENT
+  SERVICING_HANDOFF
+  DENIED
+  WITHDRAWN
+}
+
+enum DecisionOutcome {
+  PENDING
+  APPROVED
+  REFER
+  DECLINED
+}
+
+enum LoanProductType {
+  CONVENTIONAL
+  FHA
+  VA
+  HELOC
+}
+
+enum ApplicationPartyRole {
+  PRIMARY
+  CO_APPLICANT
+}
+
+enum VerificationType {
+  CREDIT_PULL
+  DOCUMENT_CHECK
+  EMPLOYMENT_CHECK
+}
+
+enum VerificationStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+enum ConditionStatus {
+  OPEN
+  SATISFIED
+  WAIVED
+  FAILED
+}
+
+enum ExternalEventType {
+  CREDIT_RESULT
+  DOCUMENT_RESULT
+  EMPLOYMENT_RESULT
+}
+
+model User {
+  id                    String                  @id @default(cuid())
+  fullName              String
+  email                 String                  @unique
+  role                  UserRole
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+  createdApplications   LoanApplication[]       @relation("CreatedApplications")
+  assignedApplications  LoanApplication[]       @relation("AssignedApplications")
+  applicationParties    ApplicationParty[]
+  createdConditions     UnderwritingCondition[] @relation("CreatedConditions")
+  resolvedConditions    UnderwritingCondition[] @relation("ResolvedConditions")
+  triggeredTransitions  ApplicationTransition[]
+  auditLogs             AuditLog[]
+}
+
+model LoanApplication {
+  id                   String                  @id @default(cuid())
+  publicId             String                  @unique
+  productType          LoanProductType
+  purpose              String
+  requestedAmount      Decimal                 @db.Decimal(12, 2)
+  stage                ApplicationStage        @default(INTAKE)
+  decisionOutcome      DecisionOutcome         @default(PENDING)
+  stageReason          String?
+  stateVersion         Int                     @default(1)
+  intakeCompletedAt    DateTime?
+  approvedAt           DateTime?
+  deniedAt             DateTime?
+  disbursedAt          DateTime?
+  servicingHandedOffAt DateTime?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  createdById          String
+  assignedOfficerId    String?
+  createdBy            User                    @relation("CreatedApplications", fields: [createdById], references: [id])
+  assignedOfficer      User?                   @relation("AssignedApplications", fields: [assignedOfficerId], references: [id])
+  parties              ApplicationParty[]
+  verifications        VerificationRequest[]
+  conditions           UnderwritingCondition[]
+  transitions          ApplicationTransition[]
+  externalEvents       ExternalWorkflowEvent[]
+  auditLogs            AuditLog[]
+}
+
+model ApplicationParty {
+  id            String               @id @default(cuid())
+  applicationId String
+  userId        String?
+  role          ApplicationPartyRole
+  firstName     String
+  lastName      String
+  email         String
+  annualIncome  Decimal              @db.Decimal(12, 2)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  application   LoanApplication      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  user          User?                @relation(fields: [userId], references: [id])
+
+  @@index([applicationId, role])
+  @@index([userId])
+}
+
+model VerificationRequest {
+  id                String              @id @default(cuid())
+  applicationId     String
+  type              VerificationType
+  status            VerificationStatus  @default(PENDING)
+  providerReference String?
+  providerSequence  Int                 @default(0)
+  summary           String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  lastPayload       Json?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  application       LoanApplication     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  externalEvents    ExternalWorkflowEvent[]
+
+  @@unique([applicationId, type])
+}
+
+model UnderwritingCondition {
+  id            String            @id @default(cuid())
+  applicationId String
+  title         String
+  description   String
+  status        ConditionStatus   @default(OPEN)
+  dueAt         DateTime?
+  resolvedAt    DateTime?
+  createdById   String
+  resolvedById  String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  application   LoanApplication   @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdBy     User              @relation("CreatedConditions", fields: [createdById], references: [id])
+  resolvedBy    User?             @relation("ResolvedConditions", fields: [resolvedById], references: [id])
+
+  @@index([applicationId, status])
+}
+
+model ApplicationTransition {
+  id                String            @id @default(cuid())
+  applicationId     String
+  fromStage         ApplicationStage
+  toStage           ApplicationStage
+  reason            String
+  triggeredById     String?
+  triggeredBySystem Boolean           @default(false)
+  metadata          Json?
+  createdAt         DateTime          @default(now())
+  application       LoanApplication   @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  triggeredBy       User?             @relation(fields: [triggeredById], references: [id])
+
+  @@index([applicationId, createdAt])
+}
+
+model ExternalWorkflowEvent {
+  id                    String               @id @default(cuid())
+  applicationId         String
+  verificationRequestId String?
+  eventType             ExternalEventType
+  providerSequence      Int
+  providerStatus        VerificationStatus
+  summary               String?
+  payload               Json
+  appliedToWorkflow     Boolean              @default(false)
+  receivedOutOfOrder    Boolean              @default(false)
+  occurredAt            DateTime
+  receivedAt            DateTime             @default(now())
+  application           LoanApplication      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  verificationRequest   VerificationRequest? @relation(fields: [verificationRequestId], references: [id])
+
+  @@index([applicationId, receivedAt])
+}
+
+model AuditLog {
+  id            String           @id @default(cuid())
+  applicationId String?
+  actorUserId   String?
+  action        String
+  entityType    String
+  entityId      String
+  summary       String
+  metadata      Json?
+  createdAt     DateTime         @default(now())
+  application   LoanApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  actor         User?            @relation(fields: [actorUserId], references: [id])
+
+  @@index([applicationId, createdAt])
+}
